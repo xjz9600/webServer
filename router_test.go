@@ -93,7 +93,7 @@ func TestRouter_AddRoute(t *testing.T) {
 			},
 			http.MethodPost: &node{
 				path: "/",
-				startChild: &node{
+				starChild: &node{
 					path:    "*",
 					handler: mockHandler,
 				},
@@ -104,13 +104,13 @@ func TestRouter_AddRoute(t *testing.T) {
 							"create": &node{
 								path:    "create",
 								handler: mockHandler,
-								startChild: &node{
+								starChild: &node{
 									path:    "*",
 									handler: mockHandler,
 								},
 							},
 						},
-						startChild: &node{
+						starChild: &node{
 							path: "*",
 							children: map[string]*node{
 								"create": &node{
@@ -123,7 +123,7 @@ func TestRouter_AddRoute(t *testing.T) {
 					"login": &node{
 						path:    "login",
 						handler: mockHandler,
-						paramChild: &node{
+						pathChild: &node{
 							path:    "id",
 							handler: mockHandler,
 						},
@@ -200,11 +200,11 @@ func (n *node) equal(y *node) (string, bool) {
 	if len(n.children) != len(y.children) {
 		return fmt.Sprintf("子节点路径数量不匹配"), false
 	}
-	if (n.startChild != nil && y.startChild == nil) || (n.startChild == nil && y.startChild != nil) {
+	if (n.starChild != nil && y.starChild == nil) || (n.starChild == nil && y.starChild != nil) {
 		return fmt.Sprintf("通配符节点不匹配"), false
 	}
-	if n.startChild != nil {
-		msg, isOk := n.startChild.equal(y.startChild)
+	if n.starChild != nil {
+		msg, isOk := n.starChild.equal(y.starChild)
 		if !isOk {
 			return msg, isOk
 		}
@@ -319,7 +319,7 @@ func TestRouter_FindRoute(t *testing.T) {
 			wantNode: &node{
 				path:    "/",
 				handler: mockHandler,
-				startChild: &node{
+				starChild: &node{
 					path:    "*",
 					handler: mockHandler,
 				},
@@ -371,7 +371,7 @@ func TestRouter_FindRoute(t *testing.T) {
 		{
 			name:      "rz retest",
 			method:    http.MethodTrace,
-			path:      "/retest/reMyTest",
+			path:      "/retest/reMyTest/abc",
 			wantFound: true,
 			wantNode: &node{
 				path:    "re.+",

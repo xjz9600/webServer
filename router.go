@@ -90,36 +90,36 @@ func (r *router) AddRoute(method string, path string, handleFunc HandleFunc) {
 
 func (n *node) childOrCreate(s string) *node {
 	if s[0] == ':' {
-		if n.startChild != nil {
+		if n.starChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有通配符匹配")
 		}
 		if n.reChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有正则匹配")
 		}
-		n.paramChild = &node{
+		n.pathChild = &node{
 			path:     s,
 			nodeType: PARAMPATH,
 		}
-		return n.paramChild
+		return n.pathChild
 	}
 	if s == "*" {
-		if n.paramChild != nil {
+		if n.pathChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有参数匹配")
 		}
 		if n.reChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有正则匹配")
 		}
-		n.startChild = &node{
+		n.starChild = &node{
 			path:     s,
 			nodeType: STARPATH,
 		}
-		return n.startChild
+		return n.starChild
 	}
 	if s[0] == '(' && s[len(s)-1] == ')' {
-		if n.paramChild != nil {
+		if n.pathChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有参数匹配")
 		}
-		if n.startChild != nil {
+		if n.starChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有通配符匹配")
 		}
 		path := s[1 : len(s)-1]
@@ -151,8 +151,8 @@ func (n *node) childOrCreate(s string) *node {
 
 func (n *node) childOf(seg string) (*node, *node, bool, bool) {
 	if n.children == nil {
-		if n.paramChild != nil {
-			return n.paramChild, n, true, true
+		if n.pathChild != nil {
+			return n.pathChild, n, true, true
 		}
 		if n.reChild != nil {
 			if n.reChild.reg.MatchString(seg) {
@@ -160,17 +160,17 @@ func (n *node) childOf(seg string) (*node, *node, bool, bool) {
 			}
 			return nil, n, false, false
 		}
-		return n.startChild, n, false, n.startChild != nil
+		return n.starChild, n, false, n.starChild != nil
 	}
 	res, ok := n.children[seg]
 	if !ok {
-		if n.paramChild != nil {
-			return n.paramChild, n, true, true
+		if n.pathChild != nil {
+			return n.pathChild, n, true, true
 		}
 		if n.reChild != nil {
 			return n.reChild, n, false, true
 		}
-		return n.startChild, n, false, n.startChild != nil
+		return n.starChild, n, false, n.starChild != nil
 	}
 	return res, n, false, true
 }
@@ -180,14 +180,14 @@ func NewRouter() router {
 }
 
 type node struct {
-	path       string
-	children   map[string]*node
-	handler    HandleFunc
-	startChild *node
-	paramChild *node
-	nodeType   NodeType
-	reChild    *node
-	reg        *regexp.Regexp
+	path      string
+	children  map[string]*node
+	handler   HandleFunc
+	starChild *node
+	pathChild *node
+	nodeType  NodeType
+	reChild   *node
+	reg       *regexp.Regexp
 }
 
 type matchInfo struct {

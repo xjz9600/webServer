@@ -47,7 +47,7 @@ func (h *HTTPServer) Serve(context *Context) {
 		context.Resp.Write([]byte("NOT FOUND"))
 		return
 	}
-	context.Params = n.params
+	context.PathParams = n.params
 	n.n.handler(context)
 }
 
