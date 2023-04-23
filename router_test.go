@@ -392,3 +392,69 @@ func TestRouter_FindRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestRouter_FindRoute_Middleware(t *testing.T) {
+	var mdsBuilder = func(i byte) Middleware {
+		return func(next HandleFunc) HandleFunc {
+			return func(context *Context) {
+				context.RespData = append(context.RespData, i)
+				next(context)
+			}
+		}
+	}
+	mdsRouter := []struct {
+		method string
+		path   string
+		mds    []Middleware
+	}{
+		{
+			method: http.MethodGet,
+			path:   "/a/b/*",
+			mds:    []Middleware{mdsBuilder('a'), mdsBuilder('b'), mdsBuilder('*')},
+		},
+		{
+			method: http.MethodGet,
+			path:   "/a/b/c",
+			mds:    []Middleware{mdsBuilder('a'), mdsBuilder('b'), mdsBuilder('c')},
+		},
+		{
+			method: http.MethodGet,
+			path:   "/a/:id/c",
+			mds:    []Middleware{mdsBuilder('a'), mdsBuilder(':'), mdsBuilder('c')},
+		},
+	}
+	r := NewRouter()
+	for _, md := range mdsRouter {
+		r.AddRoute(md.method, md.path, nil, md.mds...)
+	}
+	testCases := []struct {
+		name     string
+		method   string
+		path     string
+		wantResp string
+	}{
+		{
+			name:     "star middleware",
+			method:   http.MethodGet,
+			path:     "/a/b/c",
+			wantResp: "abcab*a:c",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mi, _ := r.FindRoute(tc.method, tc.path)
+			mdls := mi.mds
+			var root HandleFunc = func(ctx *Context) {
+				// 使用 string 可读性比较高
+				assert.Equal(t, tc.wantResp, string(ctx.RespData))
+			}
+			for i := len(mdls) - 1; i >= 0; i-- {
+				root = mdls[i](root)
+			}
+			// 开始调度
+			root(&Context{
+				RespData: make([]byte, 0, len(tc.wantResp)),
+			})
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 )
@@ -13,18 +14,35 @@ type HandleFunc func(*Context)
 type Server interface {
 	http.Handler
 	Start(addr string) error
-	AddRoute(method string, path string, handleFunc HandleFunc)
+	AddRoute(method string, path string, handleFunc HandleFunc, mds ...Middleware)
 	FindRoute(method string, path string) (*matchInfo, bool)
 }
 
 type HTTPServer struct {
 	router
+	log func(msg string, args ...any)
+	ms  []Middleware
 }
 
-func NewHttpServer() *HTTPServer {
-	return &HTTPServer{
-		NewRouter()}
+type HTTPServerOption func(server *HTTPServer)
 
+func NewHttpServer(opts ...HTTPServerOption) *HTTPServer {
+	res := &HTTPServer{
+		router: NewRouter(),
+		log: func(msg string, args ...any) {
+			fmt.Printf(msg, args...)
+		},
+	}
+	for _, opt := range opts {
+		opt(res)
+	}
+	return res
+}
+
+func ServerWithMiddleware(ms ...Middleware) HTTPServerOption {
+	return func(server *HTTPServer) {
+		server.ms = ms
+	}
 }
 
 func (h *HTTPServer) Get(path string, handleFunc HandleFunc) {
@@ -37,18 +55,31 @@ func (h *HTTPServer) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		Req:  request,
 		Resp: writer,
 	}
-	h.Serve(ctx)
+	root := h.Serve
+	if len(h.ms) > 0 {
+		root = Chain(h.ms...)(root)
+	}
+	respon := func(next HandleFunc) HandleFunc {
+		return func(context *Context) {
+			next(context)
+			context.Resp.WriteHeader(context.RespStatusCode)
+			context.Resp.Write(context.RespData)
+		}
+	}
+	root = respon(root)
+	root(ctx)
 }
 
 func (h *HTTPServer) Serve(context *Context) {
 	n, isFound := h.FindRoute(context.Req.Method, context.Req.URL.Path)
 	if !isFound || n.n.handler == nil {
-		context.Resp.WriteHeader(404)
-		context.Resp.Write([]byte("NOT FOUND"))
+		context.RespStatusCode = http.StatusNotFound
+		context.RespData = []byte("NOT FOUND")
 		return
 	}
 	context.PathParams = n.params
-	n.n.handler(context)
+	context.MatchedRoute = n.n.route
+	Chain(n.mds...)(n.n.handler)(context)
 }
 
 func (h *HTTPServer) Start(addr string) error {

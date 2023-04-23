@@ -29,11 +29,11 @@ func (r *router) FindRoute(method string, path string) (*matchInfo, bool) {
 	}
 	var params = map[string]string{}
 	segs := strings.Split(path[1:], "/")
+	cur := root
 	for _, s := range segs {
-		child, parents, isParams, found := root.childOf(s)
+		child, isParams, found := cur.childOf(s)
 		if !found {
-			if parents.nodeType == STARPATH || parents.nodeType == REPATH {
-				root = parents
+			if cur.nodeType == STARPATH || cur.nodeType == REPATH {
 				break
 			}
 			return nil, false
@@ -41,51 +41,67 @@ func (r *router) FindRoute(method string, path string) (*matchInfo, bool) {
 		if isParams {
 			params[child.path[1:]] = s
 		}
-		root = child
+		cur = child
 	}
-	if len(params) != 0 {
-		return &matchInfo{n: root, params: params}, true
+	res := &matchInfo{
+		n: cur,
 	}
-	return &matchInfo{n: root}, true
+	mds := r.findMds(root, segs)
+	if len(mds) > 0 {
+		res.mds = mds
+	}
+	if len(params) > 0 {
+		res.params = params
+	}
+	return res, true
 }
 
-func (r *router) AddRoute(method string, path string, handleFunc HandleFunc) {
-	if path == "" {
-		panic("web: 路径不能为空字符串")
+func (r *router) findMds(root *node, segs []string) []Middleware {
+	queue := []*node{root}
+	var mds []Middleware
+	if len(root.mds) > 0 {
+		mds = append(mds, root.mds...)
 	}
-	root, ok := r.trees[method]
-	if !ok {
-		root = &node{
-			path:     "/",
-			nodeType: FULLPATH,
-		}
-		r.trees[method] = root
-	}
-	if path == "/" {
-		if root.handler != nil {
-			panic("web: 路由冲突，重复注册[/]")
-		}
-		root.handler = handleFunc
-		return
-	}
-	if path[0] != '/' {
-		panic("web: 路径必须以 [/] 开头")
-	}
-	if path[len(path)-1] == '/' {
-		panic("web: 路径不能以 [/] 结尾")
-	}
-	segs := strings.Split(path[1:], "/")
 	for _, s := range segs {
-		if s == "" {
-			panic("web: 不能有连续的 //")
+		var cur []*node
+		for _, q := range queue {
+			children, childrenMds := q.findNodeChildren(s)
+			cur = append(cur, children...)
+			mds = append(mds, childrenMds...)
 		}
-		child := root.childOrCreate(s)
-		root = child
+		queue = cur
 	}
-	if root.handler != nil {
-		panic(fmt.Sprintf("web: 路由冲突，重复注册[%s]", path))
+	return mds
+}
+
+func (n *node) findNodeMds() []Middleware {
+	if len(n.mds) > 0 {
+		return n.mds
 	}
-	root.handler = handleFunc
+	return []Middleware{}
+}
+func (n *node) findNodeChildren(s string) ([]*node, []Middleware) {
+	var res []*node
+	var mds []Middleware
+	if n.children != nil {
+		if re, ok := n.children[s]; ok {
+			res = append(res, re)
+			mds = append(mds, re.findNodeMds()...)
+		}
+	}
+	if n.pathChild != nil {
+		res = append(res, n.pathChild)
+		mds = append(mds, n.pathChild.findNodeMds()...)
+	}
+	if n.starChild != nil {
+		res = append(res, n.starChild)
+		mds = append(mds, n.starChild.findNodeMds()...)
+	}
+	if n.reChild != nil && n.reChild.reg.MatchString(s) {
+		res = append(res, n.reChild)
+		mds = append(mds, n.reChild.findNodeMds()...)
+	}
+	return res, mds
 }
 
 func (n *node) childOrCreate(s string) *node {
@@ -149,30 +165,73 @@ func (n *node) childOrCreate(s string) *node {
 	return res
 }
 
-func (n *node) childOf(seg string) (*node, *node, bool, bool) {
+func (r *router) AddRoute(method string, path string, handleFunc HandleFunc, mds ...Middleware) {
+	if path == "" {
+		panic("web: 路径不能为空字符串")
+	}
+	root, ok := r.trees[method]
+	if !ok {
+		root = &node{
+			path:     "/",
+			nodeType: FULLPATH,
+		}
+		r.trees[method] = root
+	}
+	if path == "/" {
+		if root.handler != nil {
+			panic("web: 路由冲突，重复注册[/]")
+		}
+		root.handler = handleFunc
+		root.route = "/"
+		root.mds = mds
+		return
+	}
+	if path[0] != '/' {
+		panic("web: 路径必须以 [/] 开头")
+	}
+	if path[len(path)-1] == '/' {
+		panic("web: 路径不能以 [/] 结尾")
+	}
+	segs := strings.Split(path[1:], "/")
+	for _, s := range segs {
+		if s == "" {
+			panic("web: 不能有连续的 //")
+		}
+		child := root.childOrCreate(s)
+		root = child
+	}
+	if root.handler != nil {
+		panic(fmt.Sprintf("web: 路由冲突，重复注册[%s]", path))
+	}
+	root.handler = handleFunc
+	root.route = path
+	root.mds = mds
+}
+
+func (n *node) childOf(seg string) (*node, bool, bool) {
 	if n.children == nil {
 		if n.pathChild != nil {
-			return n.pathChild, n, true, true
+			return n.pathChild, true, true
 		}
 		if n.reChild != nil {
 			if n.reChild.reg.MatchString(seg) {
-				return n.reChild, n, false, true
+				return n.reChild, false, true
 			}
-			return nil, n, false, false
+			return nil, false, false
 		}
-		return n.starChild, n, false, n.starChild != nil
+		return n.starChild, false, n.starChild != nil
 	}
 	res, ok := n.children[seg]
 	if !ok {
 		if n.pathChild != nil {
-			return n.pathChild, n, true, true
+			return n.pathChild, true, true
 		}
 		if n.reChild != nil {
-			return n.reChild, n, false, true
+			return n.reChild, false, true
 		}
-		return n.starChild, n, false, n.starChild != nil
+		return n.starChild, false, n.starChild != nil
 	}
-	return res, n, false, true
+	return res, false, true
 }
 
 func NewRouter() router {
@@ -188,9 +247,12 @@ type node struct {
 	nodeType  NodeType
 	reChild   *node
 	reg       *regexp.Regexp
+	mds       []Middleware
+	route     string
 }
 
 type matchInfo struct {
 	n      *node
+	mds    []Middleware
 	params map[string]string
 }

@@ -13,6 +13,9 @@ type Context struct {
 	Resp             http.ResponseWriter
 	PathParams       map[string]string
 	cacheQueryValues url.Values
+	MatchedRoute     string
+	RespData         []byte
+	RespStatusCode   int
 }
 
 type stringValue struct {
@@ -85,12 +88,14 @@ func (c *Context) RespJson(status int, val any) error {
 	if err != nil {
 		return err
 	}
-	c.Resp.WriteHeader(status)
-	n, err := c.Resp.Write(data)
-	if n != len(data) {
-		return errors.New("web: 未写入全部数据")
-	}
-	return err
+	c.RespStatusCode = status
+	c.RespData = data
+	//c.Resp.WriteHeader(status)
+	//n, err := c.Resp.Write(data)
+	//if n != len(data) {
+	//	return errors.New("web: 未写入全部数据")
+	//}
+	return nil
 }
 
 func (c *Context) SetCookie(ck *http.Cookie) {
