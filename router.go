@@ -27,26 +27,14 @@ func (r *router) FindRoute(method string, path string) (*matchInfo, bool) {
 	if path == "/" {
 		return &matchInfo{n: root}, true
 	}
-	var params = map[string]string{}
 	segs := strings.Split(path[1:], "/")
-	cur := root
-	for _, s := range segs {
-		child, isParams, found := cur.childOf(s)
-		if !found {
-			if cur.nodeType == STARPATH || cur.nodeType == REPATH {
-				break
-			}
-			return nil, false
-		}
-		if isParams {
-			params[child.path[1:]] = s
-		}
-		cur = child
+	cur, params, found, mds := r.findNodeAndMds(root, segs)
+	if !found {
+		return nil, false
 	}
 	res := &matchInfo{
 		n: cur,
 	}
-	mds := r.findMds(root, segs)
 	if len(mds) > 0 {
 		res.mds = mds
 	}
@@ -56,9 +44,11 @@ func (r *router) FindRoute(method string, path string) (*matchInfo, bool) {
 	return res, true
 }
 
-func (r *router) findMds(root *node, segs []string) []Middleware {
+func (r *router) findNodeAndMds(root *node, segs []string) (*node, map[string]string, bool, []Middleware) {
 	queue := []*node{root}
+	var resNode *node
 	var mds []Middleware
+	var params map[string]string
 	if len(root.mds) > 0 {
 		mds = append(mds, root.mds...)
 	}
@@ -66,12 +56,37 @@ func (r *router) findMds(root *node, segs []string) []Middleware {
 		var cur []*node
 		for _, q := range queue {
 			children, childrenMds := q.findNodeChildren(s)
+			if len(children) == 0 && q.nodeType == STARPATH {
+				resNode = q
+			}
+			if q.nodeType == PARAMPATH {
+				if params == nil {
+					params = make(map[string]string)
+				}
+				params[q.path[1:]] = s
+			}
 			cur = append(cur, children...)
 			mds = append(mds, childrenMds...)
 		}
 		queue = cur
 	}
-	return mds
+	if len(queue) > 0 {
+		for i := 0; i < len(queue); i++ {
+			if queue[i].nodeType == PARAMPATH {
+				if params == nil {
+					params = make(map[string]string)
+				}
+				params[queue[i].path[1:]] = segs[len(segs)-1]
+			}
+			if queue[i].handler != nil {
+				return queue[i], params, true, mds
+			}
+		}
+	}
+	if resNode != nil {
+		return resNode, params, true, mds
+	}
+	return nil, nil, false, mds
 }
 
 func (n *node) findNodeMds() []Middleware {
@@ -112,9 +127,11 @@ func (n *node) childOrCreate(s string) *node {
 		if n.reChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有正则匹配")
 		}
-		n.pathChild = &node{
-			path:     s,
-			nodeType: PARAMPATH,
+		if n.pathChild == nil {
+			n.pathChild = &node{
+				path:     s,
+				nodeType: PARAMPATH,
+			}
 		}
 		return n.pathChild
 	}
@@ -125,9 +142,11 @@ func (n *node) childOrCreate(s string) *node {
 		if n.reChild != nil {
 			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有正则匹配")
 		}
-		n.starChild = &node{
-			path:     s,
-			nodeType: STARPATH,
+		if n.starChild == nil {
+			n.starChild = &node{
+				path:     s,
+				nodeType: STARPATH,
+			}
 		}
 		return n.starChild
 	}
@@ -143,10 +162,12 @@ func (n *node) childOrCreate(s string) *node {
 		if err != nil {
 			panic(fmt.Sprintf("正则匹配符有问题 (%s)", err.Error()))
 		}
-		n.reChild = &node{
-			path:     path,
-			nodeType: REPATH,
-			reg:      reg,
+		if n.reChild == nil {
+			n.reChild = &node{
+				path:     path,
+				nodeType: REPATH,
+				reg:      reg,
+			}
 		}
 		return n.reChild
 	}

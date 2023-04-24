@@ -280,6 +280,22 @@ func TestRouter_FindRoute(t *testing.T) {
 			method: http.MethodTrace,
 			path:   "/retest/(re.+)",
 		},
+		{
+			method: http.MethodGet,
+			path:   "/a/b/c",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/a/c/*",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/a/*",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/a/b/*",
+		},
 	}
 	r := NewRouter()
 	var mockHandler HandleFunc = func(context *Context) {}
@@ -371,10 +387,30 @@ func TestRouter_FindRoute(t *testing.T) {
 		{
 			name:      "rz retest",
 			method:    http.MethodTrace,
-			path:      "/retest/reMyTest/abc",
+			path:      "/retest/reMyTest",
 			wantFound: true,
 			wantNode: &node{
 				path:    "re.+",
+				handler: mockHandler,
+			},
+		},
+		{
+			name:      "start /a/c/d",
+			method:    http.MethodGet,
+			path:      "/a/c/d",
+			wantFound: true,
+			wantNode: &node{
+				path:    "*",
+				handler: mockHandler,
+			},
+		},
+		{
+			name:      "start /a/b/c/d",
+			method:    http.MethodGet,
+			path:      "/a/b/c/d",
+			wantFound: true,
+			wantNode: &node{
+				path:    "*",
 				handler: mockHandler,
 			},
 		},
@@ -409,8 +445,8 @@ func TestRouter_FindRoute_Middleware(t *testing.T) {
 	}{
 		{
 			method: http.MethodGet,
-			path:   "/a/b/*",
-			mds:    []Middleware{mdsBuilder('a'), mdsBuilder('b'), mdsBuilder('*')},
+			path:   "/a/*",
+			mds:    []Middleware{mdsBuilder('a'), mdsBuilder('*')},
 		},
 		{
 			method: http.MethodGet,
@@ -419,8 +455,8 @@ func TestRouter_FindRoute_Middleware(t *testing.T) {
 		},
 		{
 			method: http.MethodGet,
-			path:   "/a/:id/c",
-			mds:    []Middleware{mdsBuilder('a'), mdsBuilder(':'), mdsBuilder('c')},
+			path:   "/a/*/d",
+			mds:    []Middleware{mdsBuilder('a'), mdsBuilder('*'), mdsBuilder('d')},
 		},
 	}
 	r := NewRouter()
@@ -436,8 +472,26 @@ func TestRouter_FindRoute_Middleware(t *testing.T) {
 		{
 			name:     "star middleware",
 			method:   http.MethodGet,
+			path:     "/a/b/m",
+			wantResp: "a*",
+		},
+		{
+			name:     "star middleware",
+			method:   http.MethodGet,
+			path:     "/a/m/d",
+			wantResp: "a*a*d",
+		},
+		{
+			name:     "star middleware",
+			method:   http.MethodGet,
+			path:     "/a/c",
+			wantResp: "a*",
+		},
+		{
+			name:     "star middleware",
+			method:   http.MethodGet,
 			path:     "/a/b/c",
-			wantResp: "abcab*a:c",
+			wantResp: "a*abc",
 		},
 	}
 	for _, tc := range testCases {
