@@ -228,9 +228,22 @@ func (n *node) equal(y *node) (string, bool) {
 }
 
 func TestRouter_FindRoute(t *testing.T) {
+	var firstHandler HandleFunc = func(context *Context) {
+		fmt.Println("aa")
+	}
+	var sencodHandler HandleFunc = func(context *Context) {
+		fmt.Println("bb")
+	}
+	var thirdHandler HandleFunc = func(context *Context) {
+		fmt.Println("cc")
+	}
+	var fourHandler HandleFunc = func(context *Context) {
+		fmt.Println("dd")
+	}
 	testRoutes := []struct {
-		method string
-		path   string
+		method  string
+		path    string
+		handler HandleFunc
 	}{
 		{
 			method: http.MethodGet,
@@ -281,26 +294,35 @@ func TestRouter_FindRoute(t *testing.T) {
 			path:   "/retest/(re.+)",
 		},
 		{
-			method: http.MethodGet,
-			path:   "/a/b/c",
+			method:  http.MethodGet,
+			path:    "/a/b/c/d/*",
+			handler: firstHandler,
 		},
 		{
-			method: http.MethodGet,
-			path:   "/a/c/*",
+			method:  http.MethodGet,
+			path:    "/*/b/c/d/e",
+			handler: sencodHandler,
 		},
 		{
-			method: http.MethodGet,
-			path:   "/a/*",
+			method:  http.MethodGet,
+			path:    "/a/*/c/*/e",
+			handler: thirdHandler,
 		},
 		{
-			method: http.MethodGet,
-			path:   "/a/b/*",
+			method:  http.MethodGet,
+			path:    "/a/b/c/d/e",
+			handler: fourHandler,
 		},
 	}
 	r := NewRouter()
 	var mockHandler HandleFunc = func(context *Context) {}
 	for _, route := range testRoutes {
-		r.AddRoute(route.method, route.path, mockHandler)
+		if route.handler != nil {
+			r.AddRoute(route.method, route.path, route.handler)
+		} else {
+			r.AddRoute(route.method, route.path, mockHandler)
+		}
+
 	}
 
 	testCases := []struct {
@@ -405,13 +427,43 @@ func TestRouter_FindRoute(t *testing.T) {
 			},
 		},
 		{
-			name:      "start /a/b/c/d",
+			name:      "start /a/b/c/d/e",
 			method:    http.MethodGet,
-			path:      "/a/b/c/d",
+			path:      "/a/b/c/d/e",
+			wantFound: true,
+			wantNode: &node{
+				path:    "e",
+				handler: fourHandler,
+			},
+		},
+		{
+			name:      "start /a/b/c/d/m",
+			method:    http.MethodGet,
+			path:      "/a/b/c/d/m",
 			wantFound: true,
 			wantNode: &node{
 				path:    "*",
-				handler: mockHandler,
+				handler: firstHandler,
+			},
+		},
+		{
+			name:      "start /c/b/c/d/e",
+			method:    http.MethodGet,
+			path:      "/c/b/c/d/e",
+			wantFound: true,
+			wantNode: &node{
+				path:    "e",
+				handler: sencodHandler,
+			},
+		},
+		{
+			name:      "start /a/m/c/m/e",
+			method:    http.MethodGet,
+			path:      "/a/m/c/m/e",
+			wantFound: true,
+			wantNode: &node{
+				path:    "e",
+				handler: sencodHandler,
 			},
 		},
 	}
