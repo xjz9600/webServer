@@ -56,14 +56,14 @@ func (r *router) findNodeAndMds(root *node, segs []string) (*node, map[string]st
 		var cur []*node
 		for _, q := range queue {
 			children, childrenMds := q.findNodeChildren(s)
-			if len(children) == 0 && q.nodeType == STARPATH {
+			if q.handler != nil && q.nodeType == STARPATH {
 				resNode = q
 			}
-			if q.nodeType == PARAMPATH {
+			if q.nodeType == PARAMPATH || q.nodeType == REPATH {
 				if params == nil {
 					params = make(map[string]string)
 				}
-				params[q.path[1:]] = s
+				params[q.path] = s
 			}
 			cur = append(cur, children...)
 			mds = append(mds, childrenMds...)
@@ -72,11 +72,11 @@ func (r *router) findNodeAndMds(root *node, segs []string) (*node, map[string]st
 	}
 	if len(queue) > 0 {
 		for i := 0; i < len(queue); i++ {
-			if queue[i].nodeType == PARAMPATH {
+			if queue[i].nodeType == PARAMPATH || queue[i].nodeType == REPATH {
 				if params == nil {
 					params = make(map[string]string)
 				}
-				params[queue[i].path[1:]] = segs[len(segs)-1]
+				params[queue[i].path] = segs[len(segs)-1]
 			}
 			if queue[i].handler != nil {
 				return queue[i], params, true, mds
@@ -104,6 +104,10 @@ func (n *node) findNodeChildren(s string) ([]*node, []Middleware) {
 			mds = append(mds, re.findNodeMds()...)
 		}
 	}
+	if n.reChild != nil && n.reChild.reg.MatchString(s) {
+		res = append(res, n.reChild)
+		mds = append(mds, n.reChild.findNodeMds()...)
+	}
 	if n.pathChild != nil {
 		res = append(res, n.pathChild)
 		mds = append(mds, n.pathChild.findNodeMds()...)
@@ -112,28 +116,68 @@ func (n *node) findNodeChildren(s string) ([]*node, []Middleware) {
 		res = append(res, n.starChild)
 		mds = append(mds, n.starChild.findNodeMds()...)
 	}
-	if n.reChild != nil && n.reChild.reg.MatchString(s) {
-		res = append(res, n.reChild)
-		mds = append(mds, n.reChild.findNodeMds()...)
-	}
 	return res, mds
+}
+
+func (n *node) parseParam(path string) (string, string, bool) {
+	// 去除 :
+	path = path[1:]
+	// paramName xxx
+	segs := strings.SplitN(path, "(", 2)
+	if len(segs) == 2 {
+		expr := segs[1]
+		if strings.HasSuffix(expr, ")") {
+			return segs[0], expr[:len(expr)-1], true
+		}
+	}
+	return path, "", false
+}
+func (n *node) childOrCreateReg(path string, expr string) *node {
+	if n.starChild != nil {
+		panic(fmt.Sprintf("web: 非法路由，已有通配符路由。不允许同时注册通配符路由和正则路由 [%s]", path))
+	}
+	if n.pathChild != nil {
+		panic(fmt.Sprintf("web: 非法路由，已有路径参数路由。不允许同时注册正则路由和参数路由 [%s]", path))
+	}
+	if n.reChild != nil {
+		if n.reChild.reg.String() != expr || n.path != path {
+			panic(fmt.Sprintf("web: 路由冲突，正则路由冲突，已有 %s，新注册 %s", n.reChild.path, path))
+		}
+	} else {
+		regExpr, err := regexp.Compile(expr)
+		if err != nil {
+			panic(fmt.Errorf("web: 正则表达式错误 %w", err))
+		}
+		n.reChild = &node{path: path, reg: regExpr, nodeType: REPATH}
+	}
+	return n.reChild
+}
+
+func (n *node) childOrCreateParam(path string) *node {
+	if n.reChild != nil {
+		panic(fmt.Sprintf("web: 非法路由，已有正则路由。不允许同时注册正则路由和参数路由 [%s]", path))
+	}
+	if n.starChild != nil {
+		panic(fmt.Sprintf("web: 非法路由，已有通配符路由。不允许同时注册通配符路由和参数路由 [%s]", path))
+	}
+	if n.pathChild != nil {
+		if n.pathChild.path != path {
+			panic(fmt.Sprintf("web: 路由冲突，参数路由冲突，已有 %s，新注册 %s", n.pathChild.path, path))
+		}
+	} else {
+		n.pathChild = &node{path: path, nodeType: PARAMPATH}
+	}
+	return n.pathChild
 }
 
 func (n *node) childOrCreate(s string) *node {
 	if s[0] == ':' {
-		if n.starChild != nil {
-			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有通配符匹配")
+		path, expr, isReg := n.parseParam(s)
+		if isReg {
+			return n.childOrCreateReg(path, expr)
 		}
-		if n.reChild != nil {
-			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有正则匹配")
-		}
-		if n.pathChild == nil {
-			n.pathChild = &node{
-				path:     s,
-				nodeType: PARAMPATH,
-			}
-		}
-		return n.pathChild
+
+		return n.childOrCreateParam(path)
 	}
 	if s == "*" {
 		if n.pathChild != nil {
@@ -150,28 +194,6 @@ func (n *node) childOrCreate(s string) *node {
 		}
 		return n.starChild
 	}
-	if s[0] == '(' && s[len(s)-1] == ')' {
-		if n.pathChild != nil {
-			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有参数匹配")
-		}
-		if n.starChild != nil {
-			panic("web: 不允许同时注册路径参数和通配符匹配跟正则路由,已有通配符匹配")
-		}
-		path := s[1 : len(s)-1]
-		reg, err := regexp.Compile(path)
-		if err != nil {
-			panic(fmt.Sprintf("正则匹配符有问题 (%s)", err.Error()))
-		}
-		if n.reChild == nil {
-			n.reChild = &node{
-				path:     path,
-				nodeType: REPATH,
-				reg:      reg,
-			}
-		}
-		return n.reChild
-	}
-
 	if n.children == nil {
 		n.children = map[string]*node{}
 	}
