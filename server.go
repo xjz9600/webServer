@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"routing/template"
 )
 
 // 确保一定实现了server接口
@@ -20,8 +21,9 @@ type Server interface {
 
 type HTTPServer struct {
 	router
-	log func(msg string, args ...any)
-	ms  []Middleware
+	log       func(msg string, args ...any)
+	ms        []Middleware
+	tplEngine template.TemplateEngine
 }
 
 type HTTPServerOption func(server *HTTPServer)
@@ -44,16 +46,26 @@ func ServerWithMiddleware(ms ...Middleware) HTTPServerOption {
 		server.ms = ms
 	}
 }
+func ServerWithTemplateEngine(tpl template.TemplateEngine) HTTPServerOption {
+	return func(server *HTTPServer) {
+		server.tplEngine = tpl
+	}
+}
 
 func (h *HTTPServer) Get(path string, handleFunc HandleFunc) {
 	h.AddRoute(http.MethodGet, path, handleFunc)
 }
 
+func (h *HTTPServer) Post(path string, handleFunc HandleFunc) {
+	h.AddRoute(http.MethodPost, path, handleFunc)
+}
+
 // ServeHTTP 处理请求的入口
 func (h *HTTPServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	ctx := &Context{
-		Req:  request,
-		Resp: writer,
+		Req:       request,
+		Resp:      writer,
+		tplEngine: h.tplEngine,
 	}
 	root := h.Serve
 	if len(h.ms) > 0 {

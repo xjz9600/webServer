@@ -22,23 +22,5 @@ func TestServer(t *testing.T) {
 			fmt.Println("second end")
 		}
 	})
-	//h.AddRoute(http.MethodGet, "/retest/r/aa", func(context *Context) {
-	//	context.Resp.Write([]byte("HELLO haha tree"))
-	//}, func(next HandleFunc) HandleFunc {
-	//	return func(context *Context) {
-	//		fmt.Println("third begin")
-	//		next(context)
-	//		fmt.Println("third end")
-	//	}
-	//})
-	//h.AddRoute(http.MethodGet, "/*", func(context *Context) {
-	//	context.Resp.Write([]byte("HELLO start"))
-	//}, func(next HandleFunc) HandleFunc {
-	//	return func(context *Context) {
-	//		fmt.Println("first begin")
-	//		next(context)
-	//		fmt.Println("first end")
-	//	}
-	//})
 	h.Start(":8081")
 }

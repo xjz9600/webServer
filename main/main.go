@@ -14,13 +14,13 @@ func GetDummyEndpoint(c *gin.Context) {
 }
 
 func main() {
-
 	api := gin.Default()
 	api.Use(DummyMiddleware, DummyMiddleware2)
 
 	api.GET("/dummy", GetDummyEndpoint)
 
 	api.Run(":5000")
+
 }
 
 func DummyMiddleware(c *gin.Context) {

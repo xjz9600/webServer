@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"routing/template"
 	"strconv"
 )
 
@@ -16,6 +17,7 @@ type Context struct {
 	MatchedRoute     string
 	RespData         []byte
 	RespStatusCode   int
+	tplEngine        template.TemplateEngine
 }
 
 type stringValue struct {
@@ -56,6 +58,13 @@ func (s stringValue) AsInt64() (int64, error) {
 	return strconv.ParseInt(s.val, 10, 64)
 }
 
+func (s stringValue) AsString() (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.val, nil
+}
+
 func (c *Context) QueryValue(key string) stringValue {
 	if c.cacheQueryValues == nil {
 		c.cacheQueryValues = c.Req.URL.Query()
@@ -90,14 +99,20 @@ func (c *Context) RespJson(status int, val any) error {
 	}
 	c.RespStatusCode = status
 	c.RespData = data
-	//c.Resp.WriteHeader(status)
-	//n, err := c.Resp.Write(data)
-	//if n != len(data) {
-	//	return errors.New("web: 未写入全部数据")
-	//}
 	return nil
 }
 
 func (c *Context) SetCookie(ck *http.Cookie) {
 	http.SetCookie(c.Resp, ck)
+}
+
+func (c *Context) Render(tplName string, data any) error {
+	var err error
+	c.RespData, err = c.tplEngine.Render(c.Req.Context(), tplName, data)
+	if err != nil {
+		c.RespStatusCode = http.StatusInternalServerError
+		return err
+	}
+	c.RespStatusCode = http.StatusOK
+	return nil
 }

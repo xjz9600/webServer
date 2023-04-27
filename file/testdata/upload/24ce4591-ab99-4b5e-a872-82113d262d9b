@@ -1,0 +1,268 @@
+https://www.yuque.com/xiejunze/mb7rux/kgmisvbrkdyfa7gi
+#!/bin/bash
+
+# 监控系统正式上线前的 good case 验证， 主要覆盖以下接口：
+# 1. 告警规则配置，根据 prometheus 实例名称获取，， http://slo.sogou/api/v1/config/prom/alert?nodeName=prom08.wb.cluster1.hb.ted:8090
+# 2. 白盒配置，根据 预发机器 sn 获取 http://slo.sogou/api/v1/config/node/whitebox?sn=adea4437-a3bc-4162-bf38-3ec9061224ec  （包含进程、结构化、变量、http、日志切割）
+# 3. 黑盒配置，根据 预设探针机ID 获取 http://slo.sogou/api/v1/config/bb/http?id=41
+# 4. 白盒趋势图查询， http://slo.sogou/datasource/api/query?query=94142821.NODE.104888
+
+set -e
+
+# exported variable
+# 测试 good case 的服务域名地址
+declare -rx SERVER_DOMAIN=${SERVER_DOMAIN:-"slo.sogou"}
+# good case 测试节点
+declare -rx TARGET_TOT=${TARGET_TOT:-"104888"}
+# good case 测试机器
+declare -rx TARGET_IP=${TARGET_IP:-"10.160.16.139"}
+# good case 测试机器
+declare -rx TARGET_SN=${TARGET_SN:-"b23bb8ec-261e-4653-a3b6-59066f476861"}
+# 识别白盒告警规则合法需要包含的关键字
+declare -arx EXPECT_WB_RULES_KEYWORD=${EXPECT_WB_RULES_KEYWORD:-('pre/log_search/alive' 'pre/log_search/qps')}
+# 目标机器白盒配置的 MD5 值 (可选，空值不验证数据合法性)
+declare -rx EXPECT_WB_CONFIG_MD5=${EXPECT_WB_CONFIG_MD5:-""}
+# good case 黑盒测试探针机 id
+declare -rxi TARGET_PROBER_ID=${TARGET_PROBER_ID:-41}
+# 识别目标探针机黑盒http规则配置合法需要包含的关键字
+declare -arx EXPECT_BB_HTTP_CONFIG_KEYWORD=${EXPECT_BB_HTTP_CONFIG_KEYWORD:-('bb_http_good_case_check')}
+# 识别目标探针机黑盒tcp规则配置合法需要包含的关键字
+declare -arx EXPECT_BB_TCP_CONFIG_KEYWORD=${EXPECT_BB_TCP_CONFIG_KEYWORD:-('bb_tcp_good_case_check')}
+# 目标规则ID， 用于检测该规则趋势图查询是否正常
+declare -rxi TARGET_TREND_RULE_ID=${TARGET_TREND_RULE_ID:-94142821}
+# DataLink api 服务端口
+declare -rx DATA_LINK_API_PORT=${DATA_LINK_API_PORT:-80}
+# SLO api 服务端口
+declare -rx SLO_API_PORT=${SLO_API_PORT:-80}
+
+# intermediate variable
+declare TARGET_PROM_INS=""
+
+function log_info() {
+  echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*"
+}
+
+function log_err() {
+  echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*" >&2
+}
+
+#######################################
+# 断言 strings 中含有 substring
+# Globals:
+#   None
+# Arguments:
+#   substring 需要包含的子串
+#   strings 被断言字符串
+#######################################
+function assert_exists() {
+  local substring=$1
+  shift
+  local strings=$1
+  if [[ $strings == *"$substring"* ]]; then
+    log_info "assert_exists true, found ${substring}"
+  else
+    log_err "assert_exists false, not found ${substring}"
+    exit 1
+  fi
+}
+
+#######################################
+# 根据测试机器 IP 获取 分配的 prometheus 实例, http://slo.sogou/api/v1/tool/getProm?ip=10.160.16.139
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_IP
+# Arguments:
+#   None
+#######################################
+function get_target_prom() {
+  local fetch_prom_ins_url
+  local response
+  fetch_prom_ins_url="http://${SERVER_DOMAIN}:${SLO_API_PORT}/api/v1/tool/getProm?ip=${TARGET_IP}"
+  response=$(curl -sb --request GET "${fetch_prom_ins_url}")
+  if [[ ${response} != "{"* ]]; then
+    log_err "get target ${TARGET_IP} failed ${response}"
+    exit 1
+  fi
+  TARGET_PROM_INS=$(echo "${response}" | jq -r '.data.promInstance')
+  if [[ -z "${TARGET_PROM_INS}" ]]; then
+    log_err "get target ${TARGET_IP} failed"
+    exit 1
+  fi
+  log_info "get target ${TARGET_IP} prom: ${TARGET_PROM_INS}"
+}
+
+#######################################
+# 断言白盒告警规则配置符合预期，response 中包含指定关键字断言通过
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_IP
+# Arguments:
+#   None
+#######################################
+function assert_prom_rule() {
+  local url
+  local response
+  url="http://${SERVER_DOMAIN}:${SLO_API_PORT}/api/v1/config/prom/alert?nodeName=${TARGET_PROM_INS}"
+  response=$(curl -sb --request GET "${url}")
+  for substring in "${EXPECT_WB_RULES_KEYWORD[@]}"; do
+    assert_exists "$substring" "$response"
+  done
+  log_info "assert_prom_rule success"
+}
+
+#######################################
+# 通过比较白盒配置的md5，断言目标机器白盒配置是否符合预期
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_SN
+# Arguments:
+#   None
+#######################################
+function assert_wb_config() {
+  local url
+  local temp_file
+  local got_md5
+  local header_md5
+  url="http://${SERVER_DOMAIN}:${SLO_API_PORT}/api/v1/config/node/whitebox?sn=${TARGET_SN}"
+  temp_file=$(mktemp /tmp/XXXXXXX)
+  header_md5=$(curl -m 2 -Ss -f "${url}" -o "${temp_file}" -D - | grep "Content-Md5" | cut -d' ' -f2 | sed 's/\r$//')
+  # curl 返回为 0 且 header md5 不为空
+  if [ "${header_md5}" == "" ] || [ "${header_md5}" == "empty" ]; then
+    rm "${temp_file}"
+    log_err "assert_wb_config failed, ${header_md5}"
+    exit 1
+  fi
+  # header 里的 md5 需要与实际计算的 md5 一致
+  got_md5=$(md5sum "${temp_file}" | cut -d' ' -f1)
+  if [ "${header_md5}" != "${got_md5}" ]; then
+    rm "${temp_file}"
+    log_err "assert_wb_config failed, wrong md5 }"
+    exit 1
+  fi
+  # 外部指定的 md5 需要接口返回的 md5 一致
+  if [ "${EXPECT_WB_CONFIG_MD5}" != "" ] && [ "${EXPECT_WB_CONFIG_MD5}" != "${got_md5}" ]; then
+    rm "${temp_file}"
+    log_err "assert_wb_config failed, not expect md5. expect: ${EXPECT_WB_CONFIG_MD5} got: ${got_md5}"
+    exit 1
+  fi
+  rm "${temp_file}"
+  log_info "assert_wb_config success, got md5 ${got_md5}"
+}
+
+#######################################
+# 断言黑盒配置符合预期， 黑盒配置接口 response 中包含指定关键字，断言通过
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_PROBER_ID
+# Arguments:
+#   None
+#######################################
+function assert_bb_http_config() {
+  local url
+  local response
+  url="http://${SERVER_DOMAIN}:${SLO_API_PORT}/api/v1/config/bb/http?id=${TARGET_PROBER_ID}"
+  response=$(curl -sb --request GET "${url}")
+  for substring in "${EXPECT_BB_HTTP_CONFIG_KEYWORD[@]}"; do
+    assert_exists "$substring" "$response"
+  done
+  log_info "assert_bb_http_config success"
+}
+
+#######################################
+# 断言黑盒tcp协议配置符合预期， 黑盒配置接口 response 中包含指定关键字，断言通过
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_PROBER_ID
+# Arguments:
+#   None
+#######################################
+function assert_bb_tcp_config() {
+  local url
+  local response
+  url="http://${SERVER_DOMAIN}:${SLO_API_PORT}/api/v1/config/bb/tcp?id=${TARGET_PROBER_ID}"
+  response=$(curl -sb --request GET "${url}")
+  for substring in "${EXPECT_BB_TCP_CONFIG_KEYWORD[@]}"; do
+    assert_exists "$substring" "$response"
+  done
+  log_info "assert_bb_tcp_config success"
+}
+
+#######################################
+# 断言白盒规则趋势图查询接口，判断依据：表达式取值大于0
+# Globals:
+#   SERVER_DOMAIN
+#   TARGET_TOT
+#   TARGET_TREND_RULE_ID
+# Arguments:
+#   None
+#######################################
+function assert_wb_trend_query() {
+  local url
+  local val
+  local query
+  local response
+  local ret_code
+  query="${TARGET_TREND_RULE_ID}.NODE.${TARGET_TOT}"
+  url="http://${SERVER_DOMAIN}:${DATA_LINK_API_PORT}/datasource/api/query?query=${query}"
+  response=$(curl -sb --request GET "${url}")
+  ret_code=$(echo "${response}" | jq -r ".code")
+  if [[ ${ret_code} != 0 ]]; then
+    log_err "assert_wb_trend_query failed, ret_code: ${ret_code}"
+     exit 1
+  fi
+  val=$(echo "${response}" | jq -r ".data.\"${query}\".data.result[0].value[1]") # query 取值含有 '.'， 需要外层增加双引号
+  if [[ $(echo "${val} <= 0" | bc ) -eq 1  ]] || [[ "${val}" == "null"  ]]; then   # val 为 浮点数， 需要使用 bc 计算
+    log_err "assert_wb_trend_query failed, the rule ${TARGET_TREND_RULE_ID} value expect gt 0 , the real is ${val} "
+    exit 1
+  fi
+  log_info "assert_wb_trend_query success"
+}
+
+#######################################
+# 通过比较生成的receiversmd5来判断是否符合预期
+# Globals:
+#   TARGET_TOT
+#   RECEIVERS_MD5
+# Arguments:
+#   None
+#######################################
+function assert_receivers() {
+  local url
+  local temp_receviers_file
+  local receivers_md5
+  local receivers
+  url="select receivers from alarmReceiver where alarmId ='NODE.${TARGET_TOT}'"
+  temp_receviers_file=$(mktemp /tmp/XXXXXXX)
+  receivers=`mysql -h dashboard_57.slo.rds.sogou -P 3306 -u dashboard_slo -pd41d8cd98f00b dashboard_slo <<EOF${query};EOF`
+  receivers_md5=$(md5sum "${temp_receviers_file}" | cut -d' ' -f1)
+  # 外部指定的 md5 需要接口返回的 md5 一致
+  if [ "${RECEIVERS_MD5}" != "" ] && [ "${RECEIVERS_MD5}" != "${receivers_md5}" ]; then
+    rm "${temp_receviers_file}"
+    log_err "receivers failed,not expect md5. expect: ${RECEIVERS_MD5} got: ${receivers_md5}"
+    exit 1
+  fi
+  rm "${temp_receviers_file}"
+  log_info "assert_receivers success, got md5 ${receivers_md5}"
+}
+
+
+function main() {
+  log_info "start check good case"
+  get_target_prom
+  readonly TARGET_PROM_INS
+  log_info "######## 1. 白盒采集配置拉取接口验证 ########"
+  assert_wb_config
+  log_info "######## 2. 黑盒http协议规则配置拉取接口验证 ########"
+  assert_bb_http_config
+  log_info "######## 3. 黑盒tcp协议规则配置拉取接口验证 ########"
+  assert_bb_tcp_config
+  log_info "######## 4. 白盒告警规则拉取接口验证 ########"
+  assert_prom_rule
+  log_info "######## 5. 白盒趋势图查询接口验证 ########"
+  assert_wb_trend_query
+  log_info "######## 6. 接收人验证 ########"
+  assert_receivers
+  log_info "all good case passed"
+}
+
+main "$@"
